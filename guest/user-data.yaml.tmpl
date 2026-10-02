@@ -1,0 +1,87 @@
+#cloud-config
+# Rendered by scripts/render-cloud-init.py -- do not edit by hand.
+# Debian 12 guest: non-root user, SSH key only, desktop, TigerVNC :1, x11vnc :0.
+users:
+  - name: __VM_USER__
+    gecos: VNC guest user
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    groups: [sudo, video]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "__VM_SSH_PUBKEY__"
+package_update: true
+package_upgrade: false
+packages:
+  - openssh-server
+  - cloud-init
+  - qemu-guest-agent
+  - xserver-xorg
+  - xserver-xorg-core
+  - xinit
+  - task-desktop
+  - lightdm
+  - tigervnc-standalone-server
+  - tigervnc-common
+  - x11vnc
+  - xvfb
+  - xauth
+  - dbus-x11
+  - rsync
+  - curl
+  - wget
+  - ca-certificates
+  - gnupg
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-keepalive.conf
+    content: |
+      ClientAliveInterval 30
+      ClientAliveCountMax 6
+      TCPKeepAlive yes
+  - path: /etc/systemd/system/tigervnc@.service
+    content: |
+      [Unit]
+      Description=TigerVNC server for %i (display :1, port 5901)
+      After=network.target
+      [Service]
+      Type=forking
+      User=%i
+      Group=%i
+      WorkingDirectory=/home/%i
+      ExecStart=/usr/bin/vncserver -geometry __VNC_RESOLUTION__ -depth 24 -localhost no :1
+      ExecStop=/usr/bin/vncserver -kill :1
+      Restart=on-failure
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/x11vnc.service
+    content: |
+      [Unit]
+      Description=x11vnc on the running X display (:0, port 5900)
+      After=graphical.target
+      [Service]
+      Type=simple
+      User=__VM_USER__
+      Environment=DISPLAY=:0
+      ExecStart=/usr/bin/x11vnc -display :0 -forever -shared -rfbauth /home/__VM_USER__/.vnc/passwd -rfbport 5900 -noxdamage
+      Restart=on-failure
+      [Install]
+      WantedBy=graphical.target
+runcmd:
+  - mkdir -p /home/__VM_USER__/.vnc
+  - chmod 700 /home/__VM_USER__/.vnc
+  - printf '__VM_VNC_PASSWD__\n__VM_VNC_PASSWD__\n' | /usr/bin/vncpasswd -f > /home/__VM_USER__/.vnc/passwd
+  - chown -R __VM_USER__:__VM_USER__ /home/__VM_USER__/.vnc
+  - chmod 600 /home/__VM_USER__/.vnc/passwd
+  - systemctl enable tigervnc@__VM_USER__
+  - systemctl start tigervnc@__VM_USER__
+  - systemctl enable x11vnc
+  - systemctl start x11vnc
+  - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
+  - systemctl restart ssh
+  - systemctl enable --now qemu-guest-agent
+  # __NVIDIA_RUNCMD__
+power_state:
+  mode: reboot
+  timeout: 60
+  condition: true
